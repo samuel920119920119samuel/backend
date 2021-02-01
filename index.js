@@ -85,6 +85,11 @@ const typeDefs = gql`
     database(name: String!): Database
   }
 
+  input UpdateMyInfoInput {
+    name: String
+    age: Int
+  }
+
   input AddDatabase {
     title: String!
     body: String
@@ -95,10 +100,9 @@ const typeDefs = gql`
   }
 
   type Mutation {
-    addProvider(userId: ID!): User
-    addConsumer(userId: ID!): User
+    updateMyInfo(input: UpdateMyInfoInput!): User
+    addconsumedDbs(databaseId: ID!): User
     addDatabase(input: AddDatabase!): Database
-    deleteDatabase(databaseId: ID!): Database
     signUp(name: String, email: String!, password: String!): User
     login(email: String!, password: String!): Token
   }
@@ -114,23 +118,11 @@ const findDbByName = (title) =>
   databases.find((database) => title === database.title);
 const findDbByDbId = (databaseId) =>
   databases.find((database) => database.id === Number(databaseId));
-/*
-  // Mutations
+
+// Mutations
+// User
 const updateUserInfo = (userId, data) =>
   Object.assign(findUserByUserId(userId), data);
-
-const addPost = ({ authorId, title, body }) =>
-  (posts[posts.length] = {
-    id: posts[posts.length - 1].id + 1,
-    authorId,
-    title,
-    body,
-    likeGiverIds: [],
-    createdAt: new Date().toISOString()
-  });
-
-const updatePost = (postId, data) =>
-  Object.assign(findPostByPostId(postId), data);
 
 const addUser = ({ name, email, password }) =>
   (users[users.length] = {
@@ -140,12 +132,20 @@ const addUser = ({ name, email, password }) =>
     password
   });
 
-const deletePost = (postId) =>
-  posts.splice(
-    posts.findIndex((post) => post.id === postId),
-    1
-  )[0];
-*/
+// Database
+const updateDatabase = (postId, data) =>
+  Object.assign(findDbByDbId(postId), data);
+
+const addDatabase = ({ providers, consumers, title, body }) =>
+  (databases[databases.length] = {
+    id: databases[databases.length - 1].id + 1,
+    providers,
+    consumers,
+    title,
+    body,
+    createdAt: new Date().toISOString()
+  });
+
 const hash = (text) => bcrypt.hash(text, SALT_ROUNDS);
 
 const createToken = ({ id, email, name }) =>
@@ -158,6 +158,7 @@ const isAuthenticated = (resolverFunc) => (parent, args, context) => {
   return resolverFunc.apply(null, [parent, args, context]);
 };
 
+/*
 const isPostAuthor = (resolverFunc) => (parent, args, context) => {
   const { databaseId } = args;
   const { me } = context;
@@ -165,6 +166,7 @@ const isPostAuthor = (resolverFunc) => (parent, args, context) => {
   if (!isAuthor) throw new ForbiddenError("Only provider Can Delete this Post");
   return resolverFunc.applyFunc(parent, args, context);
 };
+*/
 
 // Resolvers
 const resolvers = {
@@ -182,33 +184,36 @@ const resolvers = {
     consumers: (parent, args, context) => findUserByUserId(parent.consumerId)
   },
   Mutation: {
-    /*
+    // User
     updateMyInfo: isAuthenticated((parent, { input }, { me }) => {
-      // 過濾空值
-      const data = ["name", "age"].reduce(
+      const data = ["name"].reduce(
         (obj, key) => (input[key] ? { ...obj, [key]: input[key] } : obj),
         {}
       );
-
       return updateUserInfo(me.id, data);
     }),
-    addFriend: isAuthenticated((parent, { userId }, { me: { id: meId } }) => {
-      const me = findUserByUserId(meId);
-      if (me.friendIds.include(userId))
-        throw new Error(`User ${userId} Already Friend.`);
+    addconsumedDbs: isAuthenticated(
+      (parent, { databaseId }, { me: { id: meId } }) => {
+        const me = findUserByUserId(meId);
+        if (me.consumedDbIds.include(databaseId))
+          throw new Error(`User ${databaseId} Already consumed.`);
 
-      const friend = findUserByUserId(userId);
-      const newMe = updateUserInfo(meId, {
-        friendIds: me.friendIds.concat(userId)
-      });
-      updateUserInfo(userId, { friendIds: friend.friendIds.concat(meId) });
+        const database = findDbByDbId(databaseId);
+        const newMe = updateUserInfo(meId, {
+          databaseId: me.consumedDbIds.concat(databaseId)
+        });
+        updateDatabase(databaseId, { meId: database.consumerIds.concat(meId) });
 
-      return newMe;
+        return newMe;
+      }
+    ),
+
+    // Database
+    addDatabase: isAuthenticated((parent, { input }, { me }) => {
+      const { provider, consumer, title, body } = input;
+      return addDatabase({ provider, consumer, title, body });
     }),
-    addPost: isAuthenticated((parent, { input }, { me }) => {
-      const { title, body } = input;
-      return addPost({ authorId: me.id, title, body });
-    }),
+    /*
     likePost: isAuthenticated((parent, { postId }, { me }) => {
       const post = findPostByPostId(Number(postId));
 
@@ -226,7 +231,7 @@ const resolvers = {
     deletePost: isAuthenticated(
       isPostAuthor((root, { postId }, { me }) => deletePost(postId))
     ),
-    
+    */
     signUp: async (root, { name, email, password }, context) => {
       // 1. 檢查不能有重複註冊 email
       const isUserEmailDuplicate = users.some((user) => user.email === email);
@@ -237,7 +242,7 @@ const resolvers = {
       // 3. 建立新 user
       return addUser({ name, email, password: hashedPassword });
     },
-    */
+
     login: async (root, { email, password }, context) => {
       // 1. 透過 email 找到相對應的 user
       const user = users.find((user) => user.email === email);
