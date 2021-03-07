@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const {
   ApolloServer,
   gql,
@@ -6,55 +8,34 @@ const {
 } = require("apollo-server");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { userModel, databaseModel } = require("./model");
 
-// 定義 bcrypt 加密所需 saltRounds 次數
-const SALT_ROUNDS = 2;
-// 定義 jwt 所需 secret (可隨便打)
-const SECRET = "just_a_random_secret";
+// Env Var
+const SALT_ROUNDS = Number(process.env.SALT_ROUNDS);
+const SECRET = process.env.SECRET;
 
-const users = [
-  {
-    id: 1,
-    email: "fong@test.com",
-    password: "$2b$04$wcwaquqi5ea1Ho0aKwkZ0e51/RUkg6SGxaumo8fxzILDmcrv4OBIO", // 123456
-    name: "Fong",
-    consumedDbIds: [1]
-  },
+// Helper Functions
+const hash = (text) => bcrypt.hash(text, SALT_ROUNDS);
 
-  {
-    id: 2,
-    email: "kevin@test.com",
-    passwrod: "$2b$04$uy73IdY9HVZrIENuLwZ3k./0azDvlChLyY1ht/73N4YfEZntgChbe", // 123456
-    name: "Kevin",
-    consumedDbIds: [1, 2]
-  },
-  {
-    id: 3,
-    email: "mary@test.com",
-    password: "$2b$04$UmERaT7uP4hRqmlheiRHbOwGEhskNw05GHYucU73JRf8LgWaqWpTy", // 123456
-    name: "Mary",
-    consumedDbIds: [2]
-  }
-];
+const createToken = ({ id, email, name }) =>
+  jwt.sign({ id, email, name }, SECRET, {
+    expiresIn: "1d"
+  });
 
-const databases = [
-  {
-    id: 1,
-    providerIds: [1],
-    consumerIds: [1, 2],
-    title: "Philippine Sea 1",
-    body: "test1",
-    createdAt: "2018-10-22T01:40:14.941Z"
-  },
-  {
-    id: 2,
-    authorId: [2],
-    consumerIds: [2, 3],
-    title: "Philippine Sea 2",
-    body: "test2",
-    createdAt: "2018-10-24T01:40:14.941Z"
-  }
-];
+const isAuthenticated = (resolverFunc) => (parent, args, context) => {
+  if (!context.me) throw new ForbiddenError("Not logged in.");
+  return resolverFunc.apply(null, [parent, args, context]);
+};
+
+/*
+const isPostAuthor = (resolverFunc) => (parent, args, context) => {
+  const { databaseId } = args;
+  const { me } = context;
+  const isAuthor = findDbByDbId(Number(databaseId)).authorId === me.id;
+  if (!isAuthor) throw new ForbiddenError("Only provider Can Delete this Post");
+  return resolverFunc.applyFunc(parent, args, context);
+};
+*/
 
 // Construct a schema, using GraphQL schema language
 const typeDefs = gql`
@@ -108,80 +89,23 @@ const typeDefs = gql`
   }
 `;
 
-// helper functions
-// Queries
-const findUserByUserId = (userId) =>
-  users.find((user) => user.id === Number(userId));
-const filterConsumedDbByUserId = (userId) =>
-  databases.filter((database) => database.providerIds.includes(Number(userId)));
-const findDbByName = (title) =>
-  databases.find((database) => title === database.title);
-const findDbByDbId = (databaseId) =>
-  databases.find((database) => database.id === Number(databaseId));
-
-// Mutations
-// User
-const updateUserInfo = (userId, data) =>
-  Object.assign(findUserByUserId(userId), data);
-
-const addUser = ({ name, email, password }) =>
-  (users[users.length] = {
-    id: users[users.length - 1].id + 1,
-    name,
-    email,
-    password
-  });
-
-// Database
-const updateDatabase = (postId, data) =>
-  Object.assign(findDbByDbId(postId), data);
-
-const addDatabase = ({ providers, consumers, title, body }) =>
-  (databases[databases.length] = {
-    id: databases[databases.length - 1].id + 1,
-    providers,
-    consumers,
-    title,
-    body,
-    createdAt: new Date().toISOString()
-  });
-
-const hash = (text) => bcrypt.hash(text, SALT_ROUNDS);
-
-const createToken = ({ id, email, name }) =>
-  jwt.sign({ id, email, name }, SECRET, {
-    expiresIn: "1d"
-  });
-
-const isAuthenticated = (resolverFunc) => (parent, args, context) => {
-  if (!context.me) throw new ForbiddenError("Not logged in.");
-  return resolverFunc.apply(null, [parent, args, context]);
-};
-
-/*
-const isPostAuthor = (resolverFunc) => (parent, args, context) => {
-  const { databaseId } = args;
-  const { me } = context;
-  const isAuthor = findDbByDbId(Number(databaseId)).authorId === me.id;
-  if (!isAuthor) throw new ForbiddenError("Only provider Can Delete this Post");
-  return resolverFunc.applyFunc(parent, args, context);
-};
-*/
-
 // Resolvers
 const resolvers = {
   Query: {
     hello: () => "world",
-    me: isAuthenticated((root, args, { me }) => findUserByUserId(me.id)),
-    databases: () => databases,
-    database: (root, { name }, context) => findDbByName(name)
+    me: isAuthenticated((root, args, { me, userModel }) =>
+      userModel.findUserByUserId(me.id)
+    ),
+    database: (root, { name }, { databaseModel }) =>
+      databaseModel.findDbByName(name)
   },
   User: {
     consumedDbs: (parent, args, context) =>
-      filterConsumedDbByUserId(parent.id || [])
+      databaseModel.filterConsumedDbByUserId(parent.id || [])
   },
   Database: {
-    consumers: (parent, args, context) => findUserByUserId(parent.consumerId)
+    consumers: (parent, args, context) =>
+      userModel.findUserByUserId(parent.consumerId)
   },
   Mutation: {
     // User
@@ -190,28 +114,27 @@ const resolvers = {
         (obj, key) => (input[key] ? { ...obj, [key]: input[key] } : obj),
         {}
       );
-      return updateUserInfo(me.id, data);
+      return userModel.updateUserInfo(me.id, data);
     }),
     addconsumedDbs: isAuthenticated(
       (parent, { databaseId }, { me: { id: meId } }) => {
-        const me = findUserByUserId(meId);
+        const me = userModel.findUserByUserId(meId);
         if (me.consumedDbIds.include(databaseId))
           throw new Error(`User ${databaseId} Already consumed.`);
-
-        const database = findDbByDbId(databaseId);
-        const newMe = updateUserInfo(meId, {
+        const database = databaseModel.findDbByDbId(databaseId);
+        const newMe = userModel.updateUserInfo(meId, {
           databaseId: me.consumedDbIds.concat(databaseId)
         });
-        updateDatabase(databaseId, { meId: database.consumerIds.concat(meId) });
-
+        databaseModel.updateDatabase(databaseId, {
+          meId: database.consumerIds.concat(meId)
+        });
         return newMe;
       }
     ),
-
     // Database
     addDatabase: isAuthenticated((parent, { input }, { me }) => {
       const { provider, consumer, title, body } = input;
-      return addDatabase({ provider, consumer, title, body });
+      return databaseModel.addDatabase({ provider, consumer, title, body });
     }),
     /*
     likePost: isAuthenticated((parent, { postId }, { me }) => {
@@ -233,26 +156,22 @@ const resolvers = {
     ),
     */
     signUp: async (root, { name, email, password }, context) => {
-      // 1. 檢查不能有重複註冊 email
-      const isUserEmailDuplicate = users.some((user) => user.email === email);
+      // check duplicated email
+      const isUserEmailDuplicate = userModel.isUserEmailDuplicate(email);
       if (isUserEmailDuplicate) throw new Error("User Email Duplicate");
-
-      // 2. 將 passwrod 加密再存進去。非常重要 !!
+      // Encrypt password
       const hashedPassword = await hash(password, SALT_ROUNDS);
-      // 3. 建立新 user
-      return addUser({ name, email, password: hashedPassword });
+      // Add a new user
+      return userModel.addUser({ name, email, password: hashedPassword });
     },
-
     login: async (root, { email, password }, context) => {
-      // 1. 透過 email 找到相對應的 user
-      const user = users.find((user) => user.email === email);
+      // find user through email
+      const user = userModel.findUserByEmail(email);
       if (!user) throw new Error("Email Account Not Exists");
-
-      // 2. 將傳進來的 password 與資料庫存的 user.password 做比對
+      // compare password
       const passwordIsValid = await bcrypt.compare(password, user.password);
       if (!passwordIsValid) throw new AuthenticationError("Wrong Password");
-
-      // 3. 成功則回傳 token
+      // return token
       return { token: await createToken(user) };
     }
   }
@@ -262,20 +181,25 @@ const server = new ApolloServer({
   typeDefs,
   resolvers,
   context: async ({ req }) => {
-    // 1. 取出 token
+    const context = {
+      secret: SECRET,
+      saltRounds: SALT_ROUNDS,
+      userModel,
+      databaseModel
+    };
+    // get token
     const token = req.headers["x-token"];
     if (token) {
       try {
-        // 2. 檢查 token + 取得解析出的資料
+        // check token and get info
         const me = await jwt.verify(token, SECRET);
-        // 3. 放進 context
+        // store in the context
         return { me };
       } catch (e) {
         throw new Error("Your session expired. Sign in again.");
       }
     }
-    // 如果沒有 token 就回傳空的 context 出去
-    return {};
+    return context;
   }
 });
 
